@@ -16,6 +16,9 @@ fi
 echo "[*] Cleaning previous builds..."
 rm -rf build dist *.spec
 
+# Create build directory
+mkdir -p build
+
 # Build the standalone executable
 echo "[*] Building koalaiptv executable..."
 pyinstaller \
@@ -24,7 +27,7 @@ pyinstaller \
     --name koalaiptv \
     --distpath dist \
     --specpath build \
-    --buildpath build/temp \
+    --workpath build/build \
     koalaiptv_linux.py
 
 # Verify the build
