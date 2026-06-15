@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════════════════════════════╗
+╔════════════════════════════════════════════════════════════════════════════╗
 ║       ___                                                                    ║
-║     {~._.~}   KoalaIPTV v1.6 (Linux onefile)                                 ║
-║      ( Y )    Zero Bullshit. Just Streams.                                   ║
-║     ()~*~()   Live • VOD • Series • yt-dlp Powered                           ║
-║     (_)-(_)                                                                  ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+║     {~._.~}   KoalaIPTV v1.6 (Linux optimized)                              ║
+║      ( Y )    Zero Bullshit. Just Streams.                                  ║
+║     ()~*~()   Live • VOD • Series • yt-dlp Powered                          ║
+║     (_)-(_)                                                                 ║
+╚════════════════════════════════════════════════════════════════════════════╝
 """
 
 import sys
@@ -21,37 +21,70 @@ import stat
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
+import textwrap
 
 VERSION = "1.6"
 
+# ────────────────────────────────────────────────────────────────────────────
+# ANSI Color codes for better CLI UX (Linux-optimized)
+# ────────────────────────────────────────────────────────────────────────────
+
+class Colors:
+    """ANSI color codes for terminal output."""
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    CYAN = "\033[36m"
+    GREEN = "\033[32m"
+    RED = "\033[31m"
+    YELLOW = "\033[33m"
+    MAGENTA = "\033[35m"
+    BLUE = "\033[34m"
+    WHITE = "\033[37m"
+    
+    @staticmethod
+    def disable():
+        """Disable colors if output is not a TTY."""
+        for attr in dir(Colors):
+            if not attr.startswith('_'):
+                setattr(Colors, attr, "")
+
+# Disable colors if not a TTY (piped output)
+if not sys.stdout.isatty():
+    Colors.disable()
+
+
 HELP_BANNER = f"""
+{Colors.CYAN}{Colors.BOLD}
        ___
      {{~._.~}}   KoalaIPTV v{VERSION}
       ( Y )    Zero Bullshit. Just Streams.
      ()~*~()   Live  |  VOD  |  Series  |  yt-dlp Powered
      (_)-(_)
+{Colors.RESET}
 """
 
 class KoalaHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Custom help formatter with banner."""
     def format_help(self):
         return HELP_BANNER + "\n" + super().format_help()
 
 
 HELP_EPILOG = """
-commands:
+{b}commands:{r}
   configure   Save Xtream provider credentials and download folder
   convert     Build an M3U playlist from your provider
   search      Interactive search and download
   download    Search by name and download (scriptable)
   update      Self-update this portable Linux build
 
-download location (search / download):
+{b}download location (search / download):{r}
   (default)   Uses the folder from configure (or ./koala_downloads)
   -c          Save to the current directory you run the command from
   --output-dir <path>   Override with a specific folder
 
-examples:
+{b}examples:{r}
   koalaiptv search
   koalaiptv -c search
   koalaiptv download "Breaking Bad" --first
@@ -59,100 +92,145 @@ examples:
   koalaiptv convert
   koalaiptv configure
   koalaiptv update
-""".strip()
+""".format(b=Colors.BOLD, r=Colors.RESET).strip()
 
 CONFIG_PATH = Path.home() / ".koala_iptv" / "config.json"
 M3U_CACHE_PATH = Path.home() / ".koala_iptv" / "playlist.m3u"
 
-# ─────────────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────────────────
+# Logging & Progress utilities (Linux CLI optimized)
+# ────────────────────────────────────────────────────────────────────────────
+
+def log_info(msg: str) -> None:
+    """Print info message."""
+    print(f"{Colors.CYAN}[*]{Colors.RESET} {msg}")
+
+def log_success(msg: str) -> None:
+    """Print success message."""
+    print(f"{Colors.GREEN}[+]{Colors.RESET} {msg}")
+
+def log_error(msg: str) -> None:
+    """Print error message."""
+    print(f"{Colors.RED}[-]{Colors.RESET} {msg}")
+
+def log_warning(msg: str) -> None:
+    """Print warning message."""
+    print(f"{Colors.YELLOW}[!]{Colors.RESET} {msg}")
+
+def log_debug(msg: str, verbose: bool = False) -> None:
+    """Print debug message if verbose."""
+    if verbose:
+        print(f"{Colors.DIM}[DEBUG]{Colors.RESET} {msg}")
+
+def progress_bar(current: int, total: int, label: str = "", width: int = 40) -> None:
+    """Display a progress bar for terminal."""
+    if total <= 0:
+        return
+    
+    percent = current / total
+    filled = int(width * percent)
+    bar = "█" * filled + "░" * (width - filled)
+    pct_str = f"{percent*100:.1f}%"
+    
+    # Use \r to overwrite line
+    print(f"\r{label} {Colors.CYAN}{bar}{Colors.RESET} {pct_str}", end="", flush=True)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Dependency auto-install (apt + pip fallback)
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 
 def _apt_install(package: str) -> bool:
     """Try to install a package via apt-get. Returns True on success."""
     try:
-        print(f"[*] Installing {package} via apt-get (may ask for sudo password)...")
+        log_info(f"Installing {Colors.BOLD}{package}{Colors.RESET} via apt-get (may ask for sudo password)...")
         result = subprocess.run(
             ["sudo", "apt-get", "install", "-y", package],
             check=True,
             timeout=120,
+            capture_output=True,
         )
         return result.returncode == 0
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-        print(f"[-] apt-get install {package} failed: {e}")
+        log_error(f"apt-get install {package} failed: {e}")
         return False
 
 
 def _pip_install(package: str) -> bool:
     """Try to install a package via pip. Returns True on success."""
     try:
-        print(f"[*] Installing {package} via pip...")
+        log_info(f"Installing {Colors.BOLD}{package}{Colors.RESET} via pip...")
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "--quiet", package],
             check=True,
             timeout=120,
+            capture_output=True,
         )
         return result.returncode == 0
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-        print(f"[-] pip install {package} failed: {e}")
+        log_error(f"pip install {package} failed: {e}")
         return False
 
 
-def ensure_dependencies(require_download: bool = False):
-    """
-    Auto-install yt-dlp and ffmpeg if they are missing.
-    Called at startup; yt-dlp/ffmpeg checks are only fatal when require_download=True.
-    """
-    # ── ffmpeg ──────────────────────────────────────────────────────────────
+def ensure_dependencies(require_download: bool = False) -> None:
+    """Auto-install yt-dlp and ffmpeg if they are missing."""
+    
+    # ── ffmpeg ──────────────────────────────────────────────────────────
     if not shutil.which("ffmpeg"):
-        print("[!] ffmpeg not found. Attempting automatic installation...")
+        log_warning("ffmpeg not found. Attempting automatic installation...")
         ok = _apt_install("ffmpeg")
         if not ok:
-            print("[!] Could not auto-install ffmpeg via apt. Install manually:")
-            print("      sudo apt-get install -y ffmpeg")
+            log_warning("Could not auto-install ffmpeg via apt. Install manually:")
+            print(f"  {Colors.BOLD}sudo apt-get install -y ffmpeg{Colors.RESET}")
             if require_download:
-                print("[-] ffmpeg is required for merged video+audio downloads. Continuing without it.")
+                log_warning("ffmpeg is required for merged video+audio downloads. Continuing without it.")
         else:
             if shutil.which("ffmpeg"):
-                print("[+] ffmpeg installed successfully.")
+                log_success("ffmpeg installed successfully.")
             else:
-                print("[!] ffmpeg installation reported success but binary not found in PATH.")
+                log_warning("ffmpeg installation reported success but binary not found in PATH.")
 
-    # ── yt-dlp ───────────────────────────────────────────────────────────────
+    # ── yt-dlp ──────────────────────────────────────────────────────────
     if not shutil.which("yt-dlp"):
-        print("[!] yt-dlp not found. Attempting automatic installation...")
-        # Try apt first (available in Ubuntu 22.04+)
+        log_warning("yt-dlp not found. Attempting automatic installation...")
         ok = _apt_install("yt-dlp")
         if not ok or not shutil.which("yt-dlp"):
-            # Fallback: pip install
             ok = _pip_install("yt-dlp")
         if shutil.which("yt-dlp"):
-            print("[+] yt-dlp installed successfully.")
+            log_success("yt-dlp installed successfully.")
         else:
-            print("[!] Could not auto-install yt-dlp. Install manually:")
-            print("      sudo apt-get install -y yt-dlp")
-            print("  or: pip install yt-dlp")
+            log_error("Could not auto-install yt-dlp. Install manually:")
+            print(f"  {Colors.BOLD}sudo apt-get install -y yt-dlp{Colors.RESET}")
+            print(f"  {Colors.BOLD}or: pip install yt-dlp{Colors.RESET}")
             if require_download:
-                print("[-] yt-dlp is required to download streams.")
+                log_error("yt-dlp is required to download streams.")
                 sys.exit(1)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 # Config helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 
-def ensure_config_dir():
+def ensure_config_dir() -> None:
+    """Ensure config directory exists."""
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
-def load_config() -> dict:
+def load_config() -> Dict:
+    """Load configuration from disk."""
     if CONFIG_PATH.exists():
-        with open(CONFIG_PATH) as f:
-            return json.load(f)
+        try:
+            with open(CONFIG_PATH) as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            log_error(f"Invalid JSON in {CONFIG_PATH}")
+            return {}
     return {}
 
 
-def save_config(cfg: dict):
+def save_config(cfg: Dict) -> None:
+    """Save configuration to disk."""
     ensure_config_dir()
     with open(CONFIG_PATH, "w") as f:
         json.dump(cfg, f, indent=2)
@@ -165,13 +243,13 @@ def get_executable_path() -> Path:
     return Path(__file__).resolve()
 
 
-def ensure_executable_permissions(path: Path):
+def ensure_executable_permissions(path: Path) -> None:
     """Ensure a file has execute permission for the owner."""
     try:
         current = path.stat().st_mode
         path.chmod(current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except Exception as e:
-        print(f"[!] Could not set execute permissions on {path}: {e}")
+        log_warning(f"Could not set execute permissions on {path}: {e}")
 
 
 def ensure_output_dir_writable(path: Path) -> Path:
@@ -179,30 +257,29 @@ def ensure_output_dir_writable(path: Path) -> Path:
     try:
         path.mkdir(parents=True, exist_ok=True)
     except PermissionError:
-        print(f"[-] Cannot create output directory (permission denied): {path}")
+        log_error(f"Cannot create output directory (permission denied): {path}")
         fallback = Path.home() / "KoalaIPTV"
-        print(f"[!] Falling back to: {fallback}")
+        log_warning(f"Falling back to: {fallback}")
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
+    
     # Quick write test
     test_file = path / ".koala_write_test"
     try:
         test_file.write_text("test")
         test_file.unlink()
     except PermissionError:
-        print(f"[-] Output directory is not writable: {path}")
+        log_error(f"Output directory is not writable: {path}")
         fallback = Path.home() / "KoalaIPTV"
-        print(f"[!] Falling back to: {fallback}")
+        log_warning(f"Falling back to: {fallback}")
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
+    
     return path
 
 
-def setup_system_path(quiet: bool = False):
-    """
-    Create a symlink in ~/.local/bin/koalaiptv so the tool is on the user's PATH.
-    Called on every run (quietly) so that after updates, the symlink stays current.
-    """
+def setup_system_path(quiet: bool = False) -> None:
+    """Create a symlink in ~/.local/bin/koalaiptv so the tool is on the user's PATH."""
     exe_path = get_executable_path()
     local_bin = Path.home() / ".local" / "bin"
     local_bin.mkdir(parents=True, exist_ok=True)
@@ -213,25 +290,26 @@ def setup_system_path(quiet: bool = False):
             symlink_path.unlink()
         symlink_path.symlink_to(exe_path)
         ensure_executable_permissions(exe_path)
+        
         if not quiet:
-            print(f"[+] Symlink created: {symlink_path} → {exe_path}")
+            log_success(f"Symlink created: {Colors.BOLD}{symlink_path}{Colors.RESET} → {Colors.DIM}{exe_path}{Colors.RESET}")
 
         if str(local_bin) not in os.environ.get("PATH", ""):
             if not quiet:
-                print(f"[!] {local_bin} is not in your PATH.")
-                print("    Add this line to your ~/.bashrc or ~/.zshrc:")
-                print('    export PATH="$HOME/.local/bin:$PATH"')
+                log_warning(f"{local_bin} is not in your PATH.")
+                print(f"  Add this line to your {Colors.BOLD}~/.bashrc{Colors.RESET} or {Colors.BOLD}~/.zshrc{Colors.RESET}:")
+                print(f"  {Colors.CYAN}export PATH=\"$HOME/.local/bin:$PATH\"{Colors.RESET}")
     except Exception as e:
         if not quiet:
-            print(f"[-] Could not create symlink: {e}")
+            log_error(f"Could not create symlink: {e}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Download helper
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Download helper with progress
+# ────────────────────────────────────────────────────────────────────────────
 
 def download_file(url: str, dest: Path, show_progress: bool = True) -> bool:
-    """Download a file with optional simple progress."""
+    """Download a file with progress bar."""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": f"KoalaIPTV-Updater/{VERSION}"})
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -239,6 +317,7 @@ def download_file(url: str, dest: Path, show_progress: bool = True) -> bool:
             downloaded = 0
             block_size = 8192
             dest.parent.mkdir(parents=True, exist_ok=True)
+            
             with open(dest, "wb") as f:
                 while True:
                     chunk = resp.read(block_size)
@@ -246,51 +325,56 @@ def download_file(url: str, dest: Path, show_progress: bool = True) -> bool:
                         break
                     f.write(chunk)
                     downloaded += len(chunk)
+                    
                     if show_progress and total > 0:
-                        pct = int(downloaded * 100 / total)
-                        print(f"\r[*] Downloading update... {pct}% ({downloaded // 1024}KB)", end="", flush=True)
+                        progress_bar(downloaded, total, "Downloading")
+            
             if show_progress:
-                print("\n[+] Download complete.")
+                print()  # Newline after progress bar
+                log_success("Download complete.")
+        
         return True
     except Exception as e:
-        print(f"\n[-] Download failed: {e}")
+        log_error(f"Download failed: {e}")
         return False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 # Linux self-updater
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 
 def find_linux_binary(search_dir: Path) -> Path:
     """Locate the koalaiptv binary inside an extracted archive."""
     candidates = list(search_dir.rglob("koalaiptv"))
     if not candidates:
         raise FileNotFoundError("koalaiptv binary not found inside the archive.")
-    # Prefer ones that look like executables
+    
     for p in candidates:
         if p.is_file() and os.access(p, os.X_OK):
             return p
-    # Fallback: return the first match and mark it executable
+    
     return candidates[0]
 
 
-def cmd_update(args):
+def cmd_update(args) -> None:
     """Self-update the portable Linux binary in-place."""
     exe_path = get_executable_path()
+    
     if not getattr(sys, "frozen", False):
-        print("[-] Update is only supported for the PyInstaller-built binary distribution.")
-        print("    Run from the installed koalaiptv binary (not from source .py).")
+        log_error("Update is only supported for the PyInstaller-built binary distribution.")
+        print(f"  Run from the installed koalaiptv binary (not from source .py)")
         return
 
-    print(f"[*] Current binary: {exe_path}")
-    print(f"[*] Current version: {VERSION}")
+    log_info(f"Current binary: {Colors.BOLD}{exe_path}{Colors.RESET}")
+    log_info(f"Current version: {Colors.BOLD}{VERSION}{Colors.RESET}")
 
     url = getattr(args, "url", None)
     repo = getattr(args, "repo", None) or load_config().get("update_repo") or "JustMrKoala/koalaiptv-linux"
 
     if not url and repo:
-        print(f"[*] Checking GitHub for latest release in {repo} ...")
+        log_info(f"Checking GitHub for latest release in {Colors.BOLD}{repo}{Colors.RESET}...")
         api = f"https://api.github.com/repos/{repo}/releases/latest"
+        
         try:
             req = urllib.request.Request(
                 api,
@@ -301,8 +385,10 @@ def cmd_update(args):
             )
             with urllib.request.urlopen(req, timeout=30) as r:
                 rel = json.loads(r.read().decode())
+            
             tag = rel.get("tag_name", "unknown")
-            print(f"[+] Latest release: {tag}")
+            log_success(f"Latest release: {Colors.BOLD}{tag}{Colors.RESET}")
+            
             assets = rel.get("assets", [])
 
             def _score(n: str) -> int:
@@ -319,31 +405,32 @@ def cmd_update(args):
                 scored = sorted(candidates, key=lambda a: _score(a.get("name", "")), reverse=True)
                 best = scored[0]
                 url = best.get("browser_download_url")
-                print(f"[*] Selected asset: {best.get('name')}")
+                log_info(f"Selected asset: {Colors.BOLD}{best.get('name')}{Colors.RESET}")
             else:
-                print("[-] No suitable asset found in the latest release.")
+                log_error("No suitable asset found in the latest release.")
+        
         except Exception as e:
-            print(f"[-] GitHub check failed: {e}")
+            log_error(f"GitHub check failed: {e}")
 
     if not url:
-        print("\n[!] No update URL available.")
-        print("    Provide one explicitly:")
-        print(f"      koalaiptv update --url https://github.com/JustMrKoala/koalaiptv-linux/releases/download/{VERSION}/koalaiptv-linux.zip")
-        print("    Or run without --url to auto-use the default repo.")
+        log_warning("No update URL available.")
+        print(f"  Provide one explicitly:")
+        print(f"    {Colors.CYAN}koalaiptv update --url https://github.com/JustMrKoala/koalaiptv-linux/releases/download/{VERSION}/koalaiptv-linux.zip{Colors.RESET}")
+        print(f"  Or run without --url to auto-use the default repo.")
         return
 
-    print(f"[*] Update package: {url}")
+    log_info(f"Update package: {Colors.BOLD}{url}{Colors.RESET}")
 
     if not getattr(args, "yes", False):
-        confirm = input("Download and apply this update now? [y/N]: ").strip().lower()
+        confirm = input(f"{Colors.YELLOW}Download and apply this update now? [y/N]:{Colors.RESET} ").strip().lower()
         if confirm not in ("y", "yes"):
-            print("[-] Update cancelled.")
+            log_error("Update cancelled.")
             return
 
     tmp_zip = Path(tempfile.gettempdir()) / f"koalaiptv_update_{os.getpid()}.zip"
     tmp_extract = Path(tempfile.mkdtemp(prefix="koalaiptv_new_"))
 
-    print("[*] Downloading...")
+    log_info("Downloading...")
     if not download_file(url, tmp_zip):
         shutil.rmtree(tmp_extract, ignore_errors=True)
         return
@@ -358,45 +445,43 @@ def cmd_update(args):
         pass
 
     if is_zip:
-        print("[*] Extracting archive...")
+        log_info("Extracting archive...")
         try:
             with zipfile.ZipFile(tmp_zip) as z:
                 z.extractall(tmp_extract)
         except Exception as e:
-            print(f"[-] Extract failed: {e}")
+            log_error(f"Extract failed: {e}")
             shutil.rmtree(tmp_extract, ignore_errors=True)
             tmp_zip.unlink(missing_ok=True)
             return
 
         try:
             new_binary = find_linux_binary(tmp_extract)
-            print(f"[*] New binary found at: {new_binary}")
+            log_info(f"New binary found at: {Colors.BOLD}{new_binary}{Colors.RESET}")
         except FileNotFoundError as e:
-            print(f"[-] {e}")
+            log_error(str(e))
             shutil.rmtree(tmp_extract, ignore_errors=True)
             tmp_zip.unlink(missing_ok=True)
             return
     else:
-        # The asset itself is the binary
         new_binary = tmp_zip
 
-    # Atomic replace: copy to a .new sibling, then rename over the old binary.
-    # This avoids "text file busy" errors on Linux when replacing a running exec.
+    # Atomic replace
     new_path = exe_path.with_suffix(".new")
     try:
         shutil.copy2(str(new_binary), str(new_path))
         ensure_executable_permissions(new_path)
-        os.replace(str(new_path), str(exe_path))  # atomic on Linux (same filesystem)
+        os.replace(str(new_path), str(exe_path))
         ensure_executable_permissions(exe_path)
-        print(f"\n[+] Binary updated in place: {exe_path}")
-        print("    Run 'koalaiptv' again to use the new version.")
+        log_success(f"Binary updated in place: {Colors.BOLD}{exe_path}{Colors.RESET}")
+        print(f"  Run {Colors.CYAN}'koalaiptv'{Colors.RESET} again to use the new version.")
     except PermissionError:
-        print(f"[-] Permission denied replacing {exe_path}")
-        print(f"    Try: sudo cp {new_binary} {exe_path} && sudo chmod +x {exe_path}")
+        log_error(f"Permission denied replacing {exe_path}")
+        print(f"  Try: {Colors.CYAN}sudo cp {new_binary} {exe_path} && sudo chmod +x {exe_path}{Colors.RESET}")
     except Exception as e:
-        print(f"[-] Update failed: {e}")
-        print(f"    New binary is at: {new_binary}")
-        print(f"    Copy manually: cp {new_binary} {exe_path} && chmod +x {exe_path}")
+        log_error(f"Update failed: {e}")
+        print(f"  New binary is at: {Colors.BOLD}{new_binary}{Colors.RESET}")
+        print(f"  Copy manually: {Colors.CYAN}cp {new_binary} {exe_path} && chmod +x {exe_path}{Colors.RESET}")
     finally:
         if is_zip:
             shutil.rmtree(tmp_extract, ignore_errors=True)
@@ -405,40 +490,41 @@ def cmd_update(args):
         if new_path_obj.exists():
             new_path_obj.unlink(missing_ok=True)
 
-    # Refresh the symlink to point at the (same path but freshly replaced) binary
     try:
         setup_system_path(quiet=True)
     except Exception:
         pass
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Xtream / M3U helpers  (identical to Windows version)
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Xtream / M3U helpers
+# ────────────────────────────────────────────────────────────────────────────
 
-def fetch_url(url: str) -> dict | list:
+def fetch_url(url: str) -> Dict | List:
+    """Fetch JSON from URL."""
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode())
     except Exception as e:
-        print(f"[-] API Fetch Error: {e}")
+        log_error(f"API Fetch Error: {e}")
         return []
 
 
 def xtream_to_m3u(host: str, username: str, password: str, output: Optional[Path] = None) -> Path:
+    """Convert Xtream credentials to M3U playlist."""
     host = host.rstrip("/")
     base = f"{host}/player_api.php?username={username}&password={password}"
 
-    print("[*] 🐨 Fetching live streams...")
+    log_info("🐨 Fetching live streams...")
     live_cats = fetch_url(f"{base}&action=get_live_categories")
     live_streams = fetch_url(f"{base}&action=get_live_streams")
 
-    print("[*] 🐨 Fetching VOD...")
+    log_info("🐨 Fetching VOD...")
     vod_cats = fetch_url(f"{base}&action=get_vod_categories")
     vod_streams = fetch_url(f"{base}&action=get_vod_streams")
 
-    print("[*] 🐨 Fetching series...")
+    log_info("🐨 Fetching series...")
     series_cats = fetch_url(f"{base}&action=get_series_categories")
     series_list = fetch_url(f"{base}&action=get_series")
 
@@ -490,13 +576,17 @@ def xtream_to_m3u(host: str, username: str, password: str, output: Optional[Path
     vod_count = len(vod_streams) if isinstance(vod_streams, list) else 0
     series_count = len(series_list) if isinstance(series_list, list) else 0
 
-    print(f"[+] Playlist saved to {dest} ({live_count} live, {vod_count} VOD, {series_count} series)")
+    log_success(f"Playlist saved to {Colors.BOLD}{dest}{Colors.RESET}")
+    print(f"  {Colors.GREEN}Live:{Colors.RESET} {live_count} | {Colors.MAGENTA}VOD:{Colors.RESET} {vod_count} | {Colors.BLUE}Series:{Colors.RESET} {series_count}")
+    
     return dest
 
 
-def parse_m3u(path: Path) -> list[dict]:
+def parse_m3u(path: Path) -> List[Dict]:
+    """Parse M3U playlist file."""
     entries = []
     current = {}
+    
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -505,6 +595,7 @@ def parse_m3u(path: Path) -> list[dict]:
                 m_group = re.search(r'group-title="([^"]*)"', line)
                 m_name = re.search(r",(.+)$", line)
                 m_series = re.search(r'series-id="([^"]*)"', line)
+                
                 current = {
                     "name": m_name.group(1).strip() if m_name else "Unknown",
                     "logo": m_logo.group(1) if m_logo else "",
@@ -516,54 +607,69 @@ def parse_m3u(path: Path) -> list[dict]:
                 current["url"] = line
                 entries.append(current)
                 current = {}
+    
     return entries
 
 
-def search_channels(entries: list[dict], query: str, group_filter: Optional[str] = None) -> list[dict]:
+def search_channels(entries: List[Dict], query: str, group_filter: Optional[str] = None) -> List[Dict]:
+    """Search channels by name and optional group."""
     q = query.lower()
     results = []
+    
     for e in entries:
         name_match = q in e["name"].lower()
         group_match = not group_filter or group_filter.lower() in e["group"].lower()
+        
         if name_match and group_match:
             results.append(e)
+    
     return results
 
 
-def display_results(results: list[dict], page: int = 0, page_size: int = 20):
+def display_results(results: List[Dict], page: int = 0, page_size: int = 20) -> None:
+    """Display search results with pagination."""
     total = len(results)
     start = page * page_size
     end = min(start + page_size, total)
-    print(f"\n{'='*60}")
-    print(f"Results {start+1}-{end} of {total}")
-    print(f"{'='*60}")
+    
+    print(f"\n{Colors.CYAN}{'═'*70}{Colors.RESET}")
+    print(f"{Colors.BOLD}Results {start+1}-{end} of {total}{Colors.RESET}")
+    print(f"{Colors.CYAN}{'═'*70}{Colors.RESET}")
+    
     for i, e in enumerate(results[start:end], start=start):
-        tag = "[Series]" if e.get("series_id") else ""
-        group = f"[{e['group']}]" if e["group"] else ""
-        print(f" {i+1:>4}. {e['name']} {tag} {group}")
-    print(f"{'='*60}\n")
+        tag = f"{Colors.MAGENTA}[Series]{Colors.RESET}" if e.get("series_id") else ""
+        group = f"{Colors.DIM}[{e['group']}]{Colors.RESET}" if e["group"] else ""
+        print(f" {i+1:>4}. {Colors.BOLD}{e['name']}{Colors.RESET} {tag} {group}")
+    
+    print(f"{Colors.CYAN}{'═'*70}{Colors.RESET}\n")
 
 
-def check_yt_dlp():
+def check_yt_dlp() -> bool:
+    """Check if yt-dlp is available."""
     return shutil.which("yt-dlp") is not None
 
 
 def find_ffmpeg() -> Optional[str]:
+    """Find ffmpeg executable."""
     path = shutil.which("ffmpeg")
     if path:
         return path
+    
     common = [
         Path("/usr/bin/ffmpeg"),
         Path("/usr/local/bin/ffmpeg"),
         Path("/snap/bin/ffmpeg"),
     ]
+    
     for p in common:
         if p.exists():
             return str(p)
+    
     return None
 
 
 def sanitize(name: str) -> str:
+    """Sanitize filename."""
     return re.sub(r'[\\/*?:"<>|]', "_", str(name)).strip("_ ")
 
 
@@ -573,11 +679,12 @@ def download_episode(
     password: str,
     series_name: str,
     season: str,
-    ep: dict,
+    ep: Dict,
     ep_index: int,
     output_root: Path,
     fmt: Optional[str] = None,
-):
+) -> None:
+    """Download a single episode."""
     ep_num = ep.get("episode_num") or (ep_index + 1)
     title = ep.get("title", f"Episode {ep_num}")
     stream_id = ep.get("id")
@@ -596,7 +703,8 @@ def download_episode(
     download_stream(url, out_name, season_dir, fmt)
 
 
-def download_stream(url: str, output_name: str, output_dir: Path, format_opts: Optional[str] = None):
+def download_stream(url: str, output_name: str, output_dir: Path, format_opts: Optional[str] = None) -> None:
+    """Download a stream using yt-dlp."""
     output_dir = ensure_output_dir_writable(output_dir)
     safe_name = sanitize(output_name)
     out_path = output_dir / f"{safe_name}.mp4"
@@ -620,34 +728,35 @@ def download_stream(url: str, output_name: str, output_dir: Path, format_opts: O
         cmd += ["--ffmpeg-location", ffmpeg]
         cmd += ["-f", format_opts if format_opts else "bestvideo+bestaudio/best"]
     else:
-        print("\n[!] ffmpeg not found — downloading best single-file stream.")
+        log_warning("ffmpeg not found — downloading best single-file stream.")
         cmd += ["-f", format_opts if format_opts else "best"]
 
     cmd += ["--", url]
 
-    print(f"[*] 🐨 Downloading: {output_name}")
-    print(f"    URL: {url}")
-    print(f"    Output: {out_path}\n")
+    log_info(f"🐨 Downloading: {Colors.BOLD}{output_name}{Colors.RESET}")
+    print(f"  URL: {Colors.DIM}{url}{Colors.RESET}")
+    print(f"  Output: {Colors.BOLD}{out_path}{Colors.RESET}\n")
 
     try:
         subprocess.run(cmd, check=True)
-        print(f"\n[+] Saved to: {out_path}")
+        log_success(f"Saved to: {Colors.BOLD}{out_path}{Colors.RESET}")
     except subprocess.CalledProcessError as e:
-        print(f"\n[-] Download failed: {e}")
+        log_error(f"Download failed: {e}")
 
 
-def browse_series(entry: dict, output_dir: Path):
+def browse_series(entry: Dict, output_dir: Path) -> None:
+    """Browse and download episodes from a series."""
     cfg = load_config()
     host = cfg.get("host", "").rstrip("/")
     username = cfg.get("username", "")
     password = cfg.get("password", "")
 
     if not all([host, username, password]):
-        print("[-] Credentials missing. Run 'koalaiptv configure'.")
+        log_error("Credentials missing. Run 'koalaiptv configure'.")
         return
 
     series_id = entry["series_id"]
-    print(f"\n[*] Fetching episodes for: {entry['name']}...")
+    log_info(f"Fetching episodes for: {Colors.BOLD}{entry['name']}{Colors.RESET}...")
 
     try:
         data = fetch_url(
@@ -657,10 +766,10 @@ def browse_series(entry: dict, output_dir: Path):
         if not isinstance(data, dict):
             data = {}
     except Exception as e:
-        print(f"[-] Could not fetch series info: {e}")
+        log_error(f"Could not fetch series info: {e}")
         return
 
-    episodes_by_season: dict[str, list] = {}
+    episodes_by_season: Dict[str, List] = {}
     raw_episodes = data.get("episodes", {})
 
     if isinstance(raw_episodes, dict):
@@ -670,32 +779,38 @@ def browse_series(entry: dict, output_dir: Path):
         episodes_by_season["1"] = raw_episodes
 
     if not episodes_by_season:
-        print("[-] No episodes found for this series.")
+        log_error("No episodes found for this series.")
         return
 
     seasons = sorted(episodes_by_season.keys(), key=lambda x: int(x) if x.isdigit() else 0)
 
     while True:
-        print(f"\n Seasons for: {entry['name']}")
-        print(f" {'='*40}")
+        print(f"\n{Colors.BOLD}Seasons for: {entry['name']}{Colors.RESET}")
+        print(f" {Colors.CYAN}{'─'*50}{Colors.RESET}")
+        
         for i, s in enumerate(seasons, 1):
             count = len(episodes_by_season[s])
             print(f"  {i}. Season {s} ({count} episodes)")
-        print(f" {'='*40}")
+        
+        print(f" {Colors.CYAN}{'─'*50}{Colors.RESET}")
 
-        pick = input(" Season number (or [b]ack, or all): ").strip().lower()
+        pick = input(f" {Colors.YELLOW}Season number (or [b]ack, or all):{Colors.RESET} ").strip().lower()
+        
         if pick == "b":
             return
 
         if pick == "all":
-            fmt = input(" Format override (leave blank for best): ").strip() or None
-            print(f"[*] Downloading ALL episodes for {entry['name']} sequentially...")
+            fmt = input(f" {Colors.YELLOW}Format override (leave blank for best):{Colors.RESET} ").strip() or None
+            log_info(f"Downloading ALL episodes for {Colors.BOLD}{entry['name']}{Colors.RESET} sequentially...")
+            
             for season_key in seasons:
                 eps = episodes_by_season[season_key]
-                print(f"\n--- Season {season_key} ---")
+                print(f"\n{Colors.MAGENTA}─── Season {season_key} ───{Colors.RESET}")
+                
                 for idx, ep in enumerate(eps):
                     download_episode(host, username, password, entry["name"], season_key, ep, idx, output_dir, fmt)
-            print(f"\n[+] Entire series download complete: {entry['name']}")
+            
+            log_success(f"Entire series download complete: {Colors.BOLD}{entry['name']}{Colors.RESET}")
             return
 
         if pick.isdigit():
@@ -704,68 +819,76 @@ def browse_series(entry: dict, output_dir: Path):
                 season_key = seasons[idx]
                 browse_episodes(entry["name"], season_key, episodes_by_season[season_key], host, username, password, output_dir)
             else:
-                print(" [-] Invalid season.")
+                log_error("Invalid season.")
 
 
 def browse_episodes(
     series_name: str,
     season: str,
-    episodes: list,
+    episodes: List,
     host: str,
     username: str,
     password: str,
     output_dir: Path,
-):
+) -> None:
+    """Browse and download episodes from a season."""
     while True:
-        print(f"\n Season {season} episodes:")
-        print(f" {'='*40}")
+        print(f"\n{Colors.BOLD}Season {season} episodes:{Colors.RESET}")
+        print(f" {Colors.CYAN}{'─'*50}{Colors.RESET}")
+        
         for i, ep in enumerate(episodes, 1):
             ep_num = ep.get("episode_num", i)
             title = ep.get("title", f"Episode {ep_num}")
             print(f"  {i}. Ep {ep_num}: {title}")
-        print(f" {'='*40}")
+        
+        print(f" {Colors.CYAN}{'─'*50}{Colors.RESET}")
 
-        pick = input(" Episode number to download (or [b]ack, or all): ").strip().lower()
+        pick = input(f" {Colors.YELLOW}Episode number to download (or [b]ack, or all):{Colors.RESET} ").strip().lower()
+        
         if pick == "b":
             return
 
         if pick == "all":
-            fmt = input(" Format override (leave blank for best): ").strip() or None
-            print(f"[*] Downloading all {len(episodes)} episodes sequentially...")
+            fmt = input(f" {Colors.YELLOW}Format override (leave blank for best):{Colors.RESET} ").strip() or None
+            log_info(f"Downloading all {len(episodes)} episodes sequentially...")
+            
             for idx, ep in enumerate(episodes):
                 download_episode(host, username, password, series_name, season, ep, idx, output_dir, fmt)
-            print("[+] Season download complete.")
+            
+            log_success("Season download complete.")
             return
 
         if pick.isdigit():
             idx = int(pick) - 1
             if 0 <= idx < len(episodes):
                 ep = episodes[idx]
-                fmt = input(" Format override (leave blank for best): ").strip() or None
+                fmt = input(f" {Colors.YELLOW}Format override (leave blank for best):{Colors.RESET} ").strip() or None
                 download_episode(host, username, password, series_name, season, ep, idx, output_dir, fmt)
             else:
-                print(" [-] Invalid episode.")
+                log_error("Invalid episode.")
 
 
-def interactive_search(m3u_path: Path, output_dir: Path):
-    print(f"[*] Loading M3U from {m3u_path}...")
+def interactive_search(m3u_path: Path, output_dir: Path) -> None:
+    """Interactive search and download interface."""
+    log_info(f"Loading M3U from {Colors.BOLD}{m3u_path}{Colors.RESET}...")
     entries = parse_m3u(m3u_path)
-    print(f"[+] Loaded {len(entries)} entries.\n")
-    print(" Just type to search. Commands: groups, quit\n")
+    log_success(f"Loaded {Colors.BOLD}{len(entries)}{Colors.RESET} entries.\n")
+    print(f"Just type to search. Commands: {Colors.CYAN}groups{Colors.RESET}, {Colors.CYAN}quit{Colors.RESET}\n")
 
     while True:
-        raw = input("koalaiptv> ").strip()
+        raw = input(f"{Colors.CYAN}koalaiptv>{Colors.RESET} ").strip()
+        
         if not raw:
             continue
 
         if raw.lower() in ("quit", "exit", "q"):
-            print("Catch ya later! 🐨")
+            log_success("Catch ya later! 🐨")
             break
 
         if raw.lower() == "groups":
             groups = sorted(set(e["group"] for e in entries if e["group"]))
             for g in groups:
-                print(f"  {g}")
+                print(f"  {Colors.BLUE}{g}{Colors.RESET}")
             print()
             continue
 
@@ -780,7 +903,7 @@ def interactive_search(m3u_path: Path, output_dir: Path):
         results = search_channels(entries, query, group_filter)
 
         if not results:
-            print("[-] No results found.\n")
+            log_error("No results found.\n")
             continue
 
         page = 0
@@ -790,7 +913,7 @@ def interactive_search(m3u_path: Path, output_dir: Path):
             display_results(results, page, page_size)
             total_pages = (len(results) - 1) // page_size
 
-            nav = input("Enter number to select, [n]ext, [p]rev, [b]ack: ").strip().lower()
+            nav = input(f"{Colors.YELLOW}Enter number to select, [n]ext, [p]rev, [b]ack:{Colors.RESET} ").strip().lower()
 
             if nav == "b":
                 break
@@ -805,23 +928,25 @@ def interactive_search(m3u_path: Path, output_dir: Path):
                 idx = int(nav) - 1
                 if 0 <= idx < len(results):
                     chosen = results[idx]
-                    print(f"\n[*] Selected: {chosen['name']}")
-                    print(f"    Group: {chosen['group']}")
+                    print(f"\n{Colors.GREEN}[+] Selected: {Colors.BOLD}{chosen['name']}{Colors.RESET}")
+                    print(f"    Group: {Colors.BLUE}{chosen['group']}{Colors.RESET}")
 
                     if chosen.get("series_id"):
                         browse_series(chosen, output_dir)
                     else:
-                        print(f"    URL: {chosen['url']}")
-                        fmt = input("Format override (leave blank for best): ").strip() or None
+                        print(f"    URL: {Colors.DIM}{chosen['url']}{Colors.RESET}")
+                        fmt = input(f"{Colors.YELLOW}Format override (leave blank for best):{Colors.RESET} ").strip() or None
                         download_stream(chosen["url"], chosen["name"], output_dir, fmt)
                 else:
-                    print("[-] Invalid number.")
+                    log_error("Invalid number.")
 
 
 def prompt(label: str, current: Optional[str] = None, required: bool = True) -> Optional[str]:
-    hint = f" [{current}]" if current else ""
+    """Prompt for user input."""
+    hint = f" {Colors.DIM}[{current}]{Colors.RESET}" if current else ""
     suffix = " (leave blank to keep)" if current else (" (required)" if required else " (optional, press Enter to skip)")
-    display = f"{label}{hint}{suffix}: "
+    display = f"{Colors.CYAN}{label}{Colors.RESET}{hint}{suffix}: "
+    
     while True:
         value = input(display).strip()
         if value:
@@ -830,45 +955,45 @@ def prompt(label: str, current: Optional[str] = None, required: bool = True) -> 
             return current
         if not required:
             return None
-        print(" This field is required.")
+        log_error("This field is required.")
 
 
-def run_wizard(cfg: dict, fresh: bool = False) -> dict:
+def run_wizard(cfg: Dict, fresh: bool = False) -> Dict:
+    """Interactive configuration wizard."""
     if fresh:
-        print("\n" + "=" * 56)
-        print(" Welcome to KoalaIPTV -- first-time setup 🐨")
-        print("=" * 56 + "\n")
+        print(f"\n{Colors.CYAN}{'═'*60}{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.GREEN} Welcome to KoalaIPTV -- first-time setup 🐨{Colors.RESET}")
+        print(f"{Colors.CYAN}{'═'*60}{Colors.RESET}\n")
         setup_system_path()
-        print("\n Please configure your Xtream Codes provider details:")
+        print(f"\n{Colors.BOLD}Please configure your Xtream Codes provider details:{Colors.RESET}\n")
     else:
-        print("\n" + "=" * 56)
-        print(" KoalaIPTV -- reconfigure")
-        print("=" * 56 + "\n")
+        print(f"\n{Colors.CYAN}{'═'*60}{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.YELLOW} KoalaIPTV -- reconfigure{Colors.RESET}")
+        print(f"{Colors.CYAN}{'═'*60}{Colors.RESET}\n")
 
-    print(" Step 1/4 Provider host")
-    print(" The base URL of your Xtream provider, e.g.")
-    print(" http://myiptv.com:8080 or https://streams.example.com\n")
-    cfg["host"] = prompt(" Host", current=cfg.get("host"))
+    print(f"{Colors.BOLD}Step 1/4 Provider host{Colors.RESET}")
+    print(f" The base URL of your Xtream provider, e.g.")
+    print(f" {Colors.DIM}http://myiptv.com:8080 or https://streams.example.com{Colors.RESET}\n")
+    cfg["host"] = prompt("Host", current=cfg.get("host"))
 
-    print("\n Step 2/4 Username")
-    cfg["username"] = prompt(" Username", current=cfg.get("username"))
+    print(f"\n{Colors.BOLD}Step 2/4 Username{Colors.RESET}")
+    cfg["username"] = prompt("Username", current=cfg.get("username"))
 
-    print("\n Step 3/4 Password")
-    cfg["password"] = prompt(" Password", current=cfg.get("password"))
+    print(f"\n{Colors.BOLD}Step 3/4 Password{Colors.RESET}")
+    cfg["password"] = prompt("Password", current=cfg.get("password"))
 
-    print("\n Step 4/4 Download folder")
-    print(" Where finished MP4 files will be saved.")
+    print(f"\n{Colors.BOLD}Step 4/4 Download folder{Colors.RESET}")
+    print(f" Where finished MP4 files will be saved.\n")
     default_dir = cfg.get("output_dir", str(Path.home() / "Videos" / "KoalaIPTV"))
-    cfg["output_dir"] = prompt(" Output dir", current=default_dir)
+    cfg["output_dir"] = prompt("Output dir", current=default_dir)
 
-    # Verify the chosen output dir is writable now
     ensure_output_dir_writable(Path(cfg["output_dir"]))
 
     save_config(cfg)
-    print("\n[+] Configuration saved.")
-    print(f"    Config file: {CONFIG_PATH}\n")
+    log_success("Configuration saved.")
+    print(f"  Config file: {Colors.DIM}{CONFIG_PATH}{Colors.RESET}\n")
 
-    fetch_now = input(" Fetch M3U playlist now? [Y/n]: ").strip().lower()
+    fetch_now = input(f"{Colors.YELLOW}Fetch M3U playlist now? [Y/n]:{Colors.RESET} ").strip().lower()
     if fetch_now in ("", "y", "yes"):
         print()
         xtream_to_m3u(cfg["host"], cfg["username"], cfg["password"])
@@ -877,14 +1002,16 @@ def run_wizard(cfg: dict, fresh: bool = False) -> dict:
     return cfg
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 # Command handlers
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 
-def cmd_configure(args):
+def cmd_configure(args) -> None:
+    """Handle configure command."""
     cfg = load_config()
     flags = [args.host, args.username, args.password,
              getattr(args, "output_dir", None), getattr(args, "update_repo", None)]
+    
     if any(flags):
         if args.host:
             cfg["host"] = args.host
@@ -896,25 +1023,30 @@ def cmd_configure(args):
             cfg["output_dir"] = args.output_dir
         if getattr(args, "update_repo", None):
             cfg["update_repo"] = args.update_repo
+        
         save_config(cfg)
-        print("[+] Configuration saved.")
+        log_success("Configuration saved.")
     else:
         run_wizard(cfg, fresh=not CONFIG_PATH.exists())
 
 
-def cmd_convert(args):
+def cmd_convert(args) -> None:
+    """Handle convert command."""
     cfg = load_config()
     host = args.host or cfg.get("host")
     username = args.username or cfg.get("username")
     password = args.password or cfg.get("password")
+    
     if not all([host, username, password]):
-        print("[-] Provide --host, --username, --password or run configure first.")
+        log_error("Provide --host, --username, --password or run configure first.")
         sys.exit(1)
+    
     out = Path(args.output) if args.output else None
     xtream_to_m3u(host, username, password, out)
 
 
-def resolve_output_dir(args, cfg: dict) -> Path:
+def resolve_output_dir(args, cfg: Dict) -> Path:
+    """Resolve output directory from args and config."""
     if getattr(args, "current", False):
         return Path.cwd().resolve()
     if getattr(args, "output_dir", None):
@@ -922,51 +1054,57 @@ def resolve_output_dir(args, cfg: dict) -> Path:
     return Path(cfg.get("output_dir", "./koala_downloads")).resolve()
 
 
-def cmd_search(args):
+def cmd_search(args) -> None:
+    """Handle search command."""
     ensure_dependencies(require_download=True)
     cfg = load_config()
     m3u = Path(args.m3u) if args.m3u else M3U_CACHE_PATH
+    
     if not m3u.exists():
-        print(f"[-] M3U not found at {m3u}. Run 'convert' first or pass --m3u.")
+        log_error(f"M3U not found at {m3u}. Run 'convert' first or pass --m3u.")
         sys.exit(1)
+    
     out_dir = resolve_output_dir(args, cfg)
     if getattr(args, "current", False):
-        print(f"[*] Download folder: current directory ({out_dir})")
+        log_info(f"Download folder: current directory ({Colors.BOLD}{out_dir}{Colors.RESET})")
+    
     interactive_search(m3u, out_dir)
 
 
-def cmd_download(args):
+def cmd_download(args) -> None:
+    """Handle download command."""
     ensure_dependencies(require_download=True)
     cfg = load_config()
     m3u = Path(args.m3u) if args.m3u else M3U_CACHE_PATH
+    
     if not m3u.exists():
-        print(f"[-] M3U not found at {m3u}. Run 'convert' first or pass --m3u.")
+        log_error(f"M3U not found at {m3u}. Run 'convert' first or pass --m3u.")
         sys.exit(1)
 
     entries = parse_m3u(m3u)
     results = search_channels(entries, args.query, args.group)
 
     if not results:
-        print("[-] No matches found.")
+        log_error("No matches found.")
         sys.exit(1)
 
     if len(results) == 1 or args.first:
         chosen = results[0]
     else:
         display_results(results, page_size=50)
-        raw = input("Enter number to download: ").strip()
+        raw = input(f"{Colors.YELLOW}Enter number to download:{Colors.RESET} ").strip()
         if not raw.isdigit():
-            print("[-] Cancelled.")
+            log_error("Cancelled.")
             sys.exit(0)
         idx = int(raw) - 1
         if not (0 <= idx < len(results)):
-            print("[-] Invalid number.")
+            log_error("Invalid number.")
             sys.exit(1)
         chosen = results[idx]
 
     out_dir = resolve_output_dir(args, cfg)
     if getattr(args, "current", False):
-        print(f"[*] Download folder: current directory ({out_dir})")
+        log_info(f"Download folder: current directory ({Colors.BOLD}{out_dir}{Colors.RESET})")
 
     if chosen.get("series_id"):
         browse_series(chosen, out_dir)
@@ -974,11 +1112,12 @@ def cmd_download(args):
         download_stream(chosen["url"], chosen["name"], out_dir, args.format)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Update check
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Version checking
+# ────────────────────────────────────────────────────────────────────────────
 
 def get_latest_version(repo: str = "JustMrKoala/koalaiptv-linux") -> Optional[str]:
+    """Check for latest version from GitHub."""
     try:
         api = f"https://api.github.com/repos/{repo}/releases/latest"
         req = urllib.request.Request(
@@ -994,38 +1133,38 @@ def get_latest_version(repo: str = "JustMrKoala/koalaiptv-linux") -> Optional[st
 
 
 def _is_newer_version(latest: str, current: str) -> bool:
-    def _t(s: str):
+    """Compare version strings."""
+    def _t(s: str) -> Tuple:
         try:
             return tuple(int(x) for x in s.split(".") if x.strip().isdigit())
         except Exception:
             return (0,)
+    
     try:
         return _t(latest) > _t(current)
     except Exception:
         return False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 # Entry point
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 
-def main():
+def main() -> None:
+    """Main entry point."""
     first_run = not CONFIG_PATH.exists()
     no_args = len(sys.argv) == 1
 
-    # Always silently try to keep the symlink / PATH current
     try:
         setup_system_path(quiet=True)
     except Exception:
         pass
 
-    # On first run with no args, go straight to the wizard
     if first_run and no_args:
-        print("[!] First run detected. Starting setup wizard...")
-        # Install deps before wizard so user doesn't hit "yt-dlp not found" later
+        log_warning("First run detected. Starting setup wizard...")
         ensure_dependencies(require_download=False)
         run_wizard({}, fresh=True)
-        print(" Run 'koalaiptv search' to start browsing.\n")
+        print(f"\n {Colors.GREEN}Run{Colors.RESET} {Colors.CYAN}'koalaiptv search'{Colors.RESET} {Colors.GREEN}to start browsing.{Colors.RESET}\n")
         sys.exit(0)
 
     parser = argparse.ArgumentParser(
@@ -1083,29 +1222,34 @@ def main():
     if no_args:
         repo = load_config().get("update_repo") or "JustMrKoala/koalaiptv-linux"
         latest = get_latest_version(repo)
+        
         if latest and _is_newer_version(latest, VERSION):
-            print(f"\n[!] New version available: {latest}  (you are on {VERSION})")
-            print("    Run:  koalaiptv update\n")
+            print(f"\n{Colors.YELLOW}[!] New version available:{Colors.RESET} {Colors.GREEN}{latest}{Colors.RESET}  (you are on {VERSION})")
+            print(f"    Run:  {Colors.CYAN}koalaiptv update{Colors.RESET}\n")
+            
             try:
-                ans = input("Update to the latest version now? [Y/n]: ").strip().lower()
+                ans = input(f"{Colors.YELLOW}Update to the latest version now? [Y/n]:{Colors.RESET} ").strip().lower()
             except EOFError:
                 ans = ""
+            
             if ans in ("", "y", "yes"):
                 class _UpdArgs:
                     url = None
                     repo = None
                     yes = True
+                
                 try:
                     cmd_update(_UpdArgs())
                     return
                 except SystemExit:
                     return
+        
         parser.print_help()
         sys.exit(0)
 
     args = parser.parse_args()
     if getattr(args, "current", False) and getattr(args, "command", None) not in ("search", "download"):
-        print("[-] -c / --current only applies to search and download commands.")
+        log_error("-c / --current only applies to search and download commands.")
         sys.exit(2)
 
     if hasattr(args, "func"):
